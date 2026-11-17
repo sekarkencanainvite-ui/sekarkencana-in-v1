@@ -1,0 +1,6 @@
+{
+  "name": "SEKAR KENCANA INVITATION",
+  "description": "Katalog resmi website undangan pernikahan digital eksklusif Sekar Kencana Invitation dengan live preview interaktif dan pemesanan cepat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

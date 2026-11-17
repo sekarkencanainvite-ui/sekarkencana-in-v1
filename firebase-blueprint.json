@@ -1,0 +1,279 @@
+{
+  "entities": {
+    "Template": {
+      "title": "Template",
+      "description": "External live wedding or event invitation website listed in the Sekar Kencana Invitation catalog.",
+      "type": "object",
+      "properties": {
+        "namaTemplate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Display name of the invitation template."
+        },
+        "kategori": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Event category (Pernikahan, Ulang Tahun, Khitanan, Aqiqah, Acara Lainnya)."
+        },
+        "fotoThumbnail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500000,
+          "description": "Compressed image data URI uploaded from device or image URL for the catalog card."
+        },
+        "linkWebsite": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "pattern": "^https?://.+",
+          "description": "Primary live URL of the external invitation website."
+        },
+        "linkPaket": {
+          "type": "object",
+          "description": "Optional per-tier live website URLs (bronze, silver, gold, platinum)."
+        },
+        "deskripsi": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "description": "Short editorial description of the template aesthetic and features."
+        },
+        "hargaPaket": {
+          "type": "object",
+          "description": "Pricing map for bronze, silver, gold, and platinum tiers in IDR."
+        },
+        "hargaPromo": {
+          "type": "object",
+          "description": "Promotional pricing configuration targeting one package tier."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the template was added."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the template was last updated."
+        }
+      },
+      "required": [
+        "namaTemplate",
+        "fotoThumbnail",
+        "linkWebsite",
+        "deskripsi",
+        "hargaPaket",
+        "hargaPromo",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PackageConfig": {
+      "title": "PackageConfig",
+      "description": "Package tier configuration (Bronze, Silver, Gold, Platinum) including name, price, promo strikethrough, and feature checklist.",
+      "type": "object",
+      "properties": {
+        "namaPaket": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "harga": {
+          "type": "number"
+        },
+        "hargaCoret": {
+          "type": "number"
+        },
+        "promoAktif": {
+          "type": "boolean"
+        },
+        "labelPromo": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "order": {
+          "type": "number"
+        },
+        "fitur": {
+          "type": "array",
+          "description": "List of package features with included/excluded boolean flags."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "namaPaket",
+        "harga",
+        "hargaCoret",
+        "promoAktif",
+        "labelPromo",
+        "order",
+        "fitur",
+        "updatedAt"
+      ]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order submitted from the Sekar Kencana Invitation storefront.",
+      "type": "object",
+      "properties": {
+        "templateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "templateName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "paketDipilih": {
+          "type": "string",
+          "enum": ["bronze", "silver", "gold", "platinum"]
+        },
+        "hargaBayar": {
+          "type": "number"
+        },
+        "namaPria": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "namaWanita": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "tanggalAcara": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "namaPemesan": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "noWA": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 30
+        },
+        "status": {
+          "type": "string",
+          "enum": ["baru", "diproses", "selesai"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "templateId",
+        "templateName",
+        "paketDipilih",
+        "hargaBayar",
+        "namaPria",
+        "namaWanita",
+        "tanggalAcara",
+        "namaPemesan",
+        "noWA",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Administrator account record mapped by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9_\\.\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"]
+        }
+      },
+      "required": ["username", "email", "role"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Storefront configuration stored in settings/whatsapp such as Admin WhatsApp number.",
+      "type": "object",
+      "properties": {
+        "noWaAdmin": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["noWaAdmin", "updatedAt"]
+    },
+    "WebsiteImages": {
+      "title": "WebsiteImages",
+      "description": "Editable storefront visual assets stored in settings/images.",
+      "type": "object",
+      "properties": {
+        "heroImage": {
+          "type": "string",
+          "maxLength": 420000,
+          "description": "Hero banner image URL or compressed base64 data URI."
+        },
+        "alurImage": {
+          "type": "string",
+          "maxLength": 420000,
+          "description": "Alur Pemesanan section image URL or compressed base64 data URI."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["heroImage", "alurImage", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/templates/{templateId}": {
+      "schema": { "$ref": "#/entities/Template" },
+      "description": "Publicly readable catalog of external invitation websites."
+    },
+    "/packages/{packageId}": {
+      "schema": { "$ref": "#/entities/PackageConfig" },
+      "description": "Package tier definitions and feature checklists."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer orders created from storefront."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Admin records keyed by Firebase Auth UID."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/StoreSettings" },
+      "description": "Public storefront settings documents: whatsapp, images, and legacy store."
+    }
+  }
+}
