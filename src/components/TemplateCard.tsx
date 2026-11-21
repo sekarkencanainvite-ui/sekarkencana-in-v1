@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
-import { Check, Eye, ImageOff, ShoppingBag, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Check, Eye, ImageOff, ShoppingBag, X } from 'lucide-react';
 import { PackageConfig, PackageTier, TemplateItem } from '../types';
 import {
   formatRupiah,
+  getOrderedPackages,
   getPackagePrice,
+  isPackageAvailableForTemplate,
   isPromoActive,
-  PACKAGE_TIERS,
 } from '../lib/pricing';
 
 interface TemplateCardProps {
@@ -21,13 +22,18 @@ export default function TemplateCard({
   onPreview,
   onOrder,
 }: TemplateCardProps) {
+  const orderedPackages = useMemo(() => getOrderedPackages(packageConfigs), [packageConfigs]);
   const promoCurrentlyActive = isPromoActive(template.hargaPromo);
-  const firstFirestoreTier = PACKAGE_TIERS.find((t) => Boolean(packageConfigs?.[t.key]))?.key;
-  const initialTier: PackageTier = promoCurrentlyActive
-    ? template.hargaPromo.paket
-    : firstFirestoreTier || 'bronze';
 
-  const [selectedTier, setSelectedTier] = useState<PackageTier>(initialTier);
+  const firstAvailableTier = useMemo(() => {
+    if (promoCurrentlyActive && isPackageAvailableForTemplate(template, template.hargaPromo.paket)) {
+      return template.hargaPromo.paket;
+    }
+    const found = orderedPackages.find((t) => isPackageAvailableForTemplate(template, t.key));
+    return found?.key || orderedPackages[0]?.key || 'bronze';
+  }, [orderedPackages, promoCurrentlyActive, template]);
+
+  const [selectedTier, setSelectedTier] = useState<PackageTier>(firstAvailableTier);
   const [imgError, setImgError] = useState(false);
 
   useEffect(() => {
@@ -35,11 +41,14 @@ export default function TemplateCard({
   }, [template.fotoThumbnail]);
 
   useEffect(() => {
-    if (!promoCurrentlyActive && !packageConfigs?.[selectedTier] && firstFirestoreTier) {
-      setSelectedTier(firstFirestoreTier);
+    const selectedExists = orderedPackages.some((t) => t.key === selectedTier);
+    const selectedIsAvailable = isPackageAvailableForTemplate(template, selectedTier);
+    if (!selectedExists || (!selectedIsAvailable && isPackageAvailableForTemplate(template, firstAvailableTier))) {
+      setSelectedTier(firstAvailableTier);
     }
-  }, [firstFirestoreTier, packageConfigs, promoCurrentlyActive, selectedTier]);
+  }, [firstAvailableTier, orderedPackages, selectedTier, template]);
 
+  const selectedIsAvailable = isPackageAvailableForTemplate(template, selectedTier);
   const activePrice = getPackagePrice(template, selectedTier, packageConfigs);
   const pkgFromFirestore = packageConfigs?.[selectedTier];
   const activeFeatures = pkgFromFirestore?.fitur || [];
@@ -70,7 +79,7 @@ export default function TemplateCard({
         )}
 
         {/* Sharp Architectural Promo Corner Tag (Zero-Pill) */}
-        {(promoCurrentlyActive || activePrice.isPromo) && (
+        {selectedIsAvailable && (promoCurrentlyActive || activePrice.isPromo) && (
           <div className="absolute top-3 right-3 bg-[#0B0B0D]/95 border border-[#D4AF37] px-3 py-1 text-[11px] font-semibold tracking-[0.14em] uppercase text-[#D4AF37]">
             PROMO · {promoCurrentlyActive ? template.hargaPromo.labelPromo || 'Promo' : activePrice.labelPromo}
           </div>
@@ -91,39 +100,53 @@ export default function TemplateCard({
           </p>
         </div>
 
-        {/* 4 Clickable Package Tiers */}
+        {/* Clickable Package Tiers */}
         <div className="mb-4">
           <div className="flex items-center justify-between text-xs text-[#71717A] mb-2.5 gap-2">
             <span className="font-medium text-[#111113]">Pilih Paket Harga</span>
-            <span className="tabular-nums font-medium text-[#9E7B2F] text-right">
-              {activePrice.tierLabel}: {formatRupiah(activePrice.finalPrice)}
+            <span
+              className={`tabular-nums font-medium text-right ${
+                selectedIsAvailable ? 'text-[#9E7B2F]' : 'text-red-700'
+              }`}
+            >
+              {selectedIsAvailable
+                ? `${activePrice.tierLabel}: ${formatRupiah(activePrice.finalPrice)}`
+                : 'Template tidak tersedia'}
             </span>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            {PACKAGE_TIERS.map((tierMeta) => {
+            {orderedPackages.map((tierMeta) => {
+              const isAvailable = isPackageAvailableForTemplate(template, tierMeta.key);
               const priceInfo = getPackagePrice(template, tierMeta.key, packageConfigs);
-              const isSelected = selectedTier === tierMeta.key;
+              const isSelected = selectedTier === tierMeta.key && isAvailable;
 
               return (
                 <button
                   key={tierMeta.key}
                   type="button"
-                  onClick={() => setSelectedTier(tierMeta.key)}
+                  disabled={!isAvailable}
+                  onClick={() => {
+                    if (isAvailable) {
+                      setSelectedTier(tierMeta.key);
+                    }
+                  }}
                   aria-pressed={isSelected}
-                  className={`text-left px-3 py-2.5 border transition-colors min-h-[60px] flex flex-col justify-between focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C8A24D] ${
-                    isSelected
+                  className={`text-left px-3 py-2.5 border transition-colors min-h-[64px] flex flex-col justify-between focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C8A24D] ${
+                    !isAvailable
+                      ? 'bg-[#F3F1EC] border-[#E4E0D8] text-[#71717A] cursor-not-allowed opacity-75'
+                      : isSelected
                       ? 'bg-[#0B0B0D] border-[#C8A24D] text-[#FAF8F4]'
                       : 'bg-[#FAF8F4] border-[#E4E0D8] text-[#111113] hover:border-[#C8A24D]/60'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-1 w-full">
-                    <span className="text-xs font-semibold tracking-wide uppercase whitespace-nowrap">
+                    <span className="text-xs font-semibold tracking-wide uppercase truncate">
                       {priceInfo.tierLabel}
                     </span>
-                    {priceInfo.isPromo && (
+                    {isAvailable && priceInfo.isPromo && (
                       <span
-                        className={`text-[10px] font-semibold tracking-wider uppercase truncate ${
+                        className={`text-[10px] font-semibold tracking-wider uppercase truncate shrink-0 ${
                           isSelected ? 'text-[#D4AF37]' : 'text-[#9E7B2F]'
                         }`}
                       >
@@ -132,50 +155,74 @@ export default function TemplateCard({
                     )}
                   </div>
 
-                  <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
-                    {priceInfo.isPromo ? (
-                      <>
-                        <span
-                          className={`text-[11px] line-through tabular-nums ${
-                            isSelected ? 'text-[#FAF8F4]/50' : 'text-[#71717A]'
-                          }`}
-                        >
-                          {formatRupiah(priceInfo.normalPrice)}
-                        </span>
-                        <span
-                          className={`text-sm font-semibold tabular-nums ${
-                            isSelected ? 'text-[#D4AF37]' : 'text-[#9E7B2F]'
-                          }`}
-                        >
+                  {!isAvailable ? (
+                    <div className="mt-1">
+                      <span className="block text-[11px] font-medium text-red-700 leading-tight">
+                        Template tidak tersedia
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
+                      {priceInfo.isPromo ? (
+                        <>
+                          <span
+                            className={`text-[11px] line-through tabular-nums ${
+                              isSelected ? 'text-[#FAF8F4]/50' : 'text-[#71717A]'
+                            }`}
+                          >
+                            {formatRupiah(priceInfo.normalPrice)}
+                          </span>
+                          <span
+                            className={`text-sm font-semibold tabular-nums ${
+                              isSelected ? 'text-[#D4AF37]' : 'text-[#9E7B2F]'
+                            }`}
+                          >
+                            {formatRupiah(priceInfo.finalPrice)}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-sm font-semibold tabular-nums">
                           {formatRupiah(priceInfo.finalPrice)}
                         </span>
-                      </>
-                    ) : (
-                      <span className="text-sm font-semibold tabular-nums">
-                        {formatRupiah(priceInfo.finalPrice)}
-                      </span>
-                    )}
-                  </div>
+                      )}
+                    </div>
+                  )}
                 </button>
               );
             })}
           </div>
         </div>
 
+        {/* Notice when no package link is available */}
+        {!selectedIsAvailable && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 flex items-start gap-2 text-xs text-red-800">
+            <AlertCircle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+            <span>
+              <strong>Template tidak tersedia.</strong> Link desain untuk paket ini belum ditempelkan sehingga sementara belum dapat dipesan.
+            </span>
+          </div>
+        )}
+
         {/* Feature Checklist Box (100% from Firestore) */}
         <div className="mb-5 bg-[#FAF8F4] border border-[#C8A24D]/30 p-3.5">
           <div className="flex items-center justify-between gap-2 pb-2 mb-2.5 border-b border-[#E4E0D8]">
             <p className="text-xs font-semibold text-[#111113] uppercase tracking-wider">
-              Fitur yang Kamu Dapat · {activePrice.tierLabel}
+              {selectedIsAvailable
+                ? `Fitur yang Kamu Dapat · ${activePrice.tierLabel}`
+                : 'Status Ketersediaan Paket'}
             </p>
-            {activeFeatures.length > 0 && (
+            {selectedIsAvailable && activeFeatures.length > 0 && (
               <span className="text-[11px] font-medium text-[#9E7B2F] tabular-nums shrink-0">
                 {includedCount}/{activeFeatures.length} Fitur
               </span>
             )}
           </div>
 
-          {activeFeatures.length === 0 ? (
+          {!selectedIsAvailable ? (
+            <p className="text-xs text-[#71717A] leading-relaxed">
+              Template tidak tersedia untuk pilihan paket saat ini.
+            </p>
+          ) : activeFeatures.length === 0 ? (
             <p className="text-xs text-[#71717A] leading-relaxed">
               Belum ada daftar fitur untuk paket {activePrice.tierLabel} di Firestore.
             </p>
@@ -212,8 +259,13 @@ export default function TemplateCard({
         <div className="mt-auto pt-4 border-t border-[#E4E0D8] grid grid-cols-2 gap-3">
           <button
             type="button"
-            onClick={() => onPreview(template, selectedTier)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] text-xs sm:text-sm font-medium border border-[#111113] text-[#111113] bg-white hover:bg-[#111113] hover:text-[#FAF8F4] transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C8A24D]"
+            disabled={!selectedIsAvailable}
+            onClick={() => {
+              if (selectedIsAvailable) {
+                onPreview(template, selectedTier);
+              }
+            }}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] text-xs sm:text-sm font-medium border border-[#111113] text-[#111113] bg-white hover:bg-[#111113] hover:text-[#FAF8F4] disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-[#111113] transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C8A24D]"
           >
             <Eye className="w-4 h-4 shrink-0" strokeWidth={1.75} />
             <span>Lihat Preview</span>
@@ -221,11 +273,16 @@ export default function TemplateCard({
 
           <button
             type="button"
-            onClick={() => onOrder(template, selectedTier)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] text-xs sm:text-sm font-semibold bg-[#C8A24D] text-[#0B0B0D] hover:bg-[#D4AF37] transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B0B0D]"
+            disabled={!selectedIsAvailable}
+            onClick={() => {
+              if (selectedIsAvailable) {
+                onOrder(template, selectedTier);
+              }
+            }}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] text-xs sm:text-sm font-semibold bg-[#C8A24D] text-[#0B0B0D] hover:bg-[#D4AF37] disabled:bg-[#D4CFC5] disabled:text-[#52525B] disabled:cursor-not-allowed transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B0B0D]"
           >
             <ShoppingBag className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-            <span>Order {activePrice.tierLabel}</span>
+            <span>{selectedIsAvailable ? `Order ${activePrice.tierLabel}` : 'Tidak Tersedia'}</span>
           </button>
         </div>
       </div>

@@ -38,6 +38,7 @@ import {
   DEFAULT_ADMIN_EMAIL,
   DEFAULT_ADMIN_USERNAME,
   DEFAULT_WEBSITE_IMAGES,
+  deletePackageConfig,
   ensureInitialAdminDoc,
   findAdminByUsername,
   getAdminProfileByUid,
@@ -59,16 +60,18 @@ import {
 import {
   buildWhatsAppUrl,
   createEmptyPackageConfig,
-  EMPTY_HARGA_PAKET,
   EMPTY_HARGA_PROMO,
-  EMPTY_LINK_PAKET,
   formatFirestoreTimestamp,
   formatNomorWA,
   formatRupiah,
+  generatePackageId,
+  getNextPackageOrder,
+  getOrderedPackages,
   getTemplatePreviewLink,
   getTierLabel,
+  isCorePackageId,
+  isPackageAvailableForTemplate,
   isPromoActive,
-  PACKAGE_TIERS,
   TEMPLATE_CATEGORIES,
 } from './lib/pricing';
 import { compressImageFileToDataUrl, estimateDataUrlSizeKb } from './lib/imageUpload';
@@ -87,20 +90,24 @@ import {
 function createInitialFormState(
   packageConfigs?: Partial<Record<PackageTier, PackageConfig>>
 ): TemplateFormPayload {
+  const ordered = getOrderedPackages(packageConfigs);
+  const linkPaket: Record<string, string> = {};
+  const hargaPaket: Record<string, number> = {};
+
+  ordered.forEach((slot) => {
+    linkPaket[slot.key] = '';
+    hargaPaket[slot.key] = packageConfigs?.[slot.key]?.harga ?? 0;
+  });
+
   return {
     namaTemplate: '',
     kategori: 'Pernikahan',
     fotoThumbnail: '',
     linkWebsite: '',
-    linkPaket: { ...EMPTY_LINK_PAKET },
+    linkPaket,
     deskripsi: '',
-    hargaPaket: {
-      bronze: packageConfigs?.bronze?.harga ?? EMPTY_HARGA_PAKET.bronze,
-      silver: packageConfigs?.silver?.harga ?? EMPTY_HARGA_PAKET.silver,
-      gold: packageConfigs?.gold?.harga ?? EMPTY_HARGA_PAKET.gold,
-      platinum: packageConfigs?.platinum?.harga ?? EMPTY_HARGA_PAKET.platinum,
-    },
-    hargaPromo: { ...EMPTY_HARGA_PROMO },
+    hargaPaket,
+    hargaPromo: { ...EMPTY_HARGA_PROMO, paket: ordered[0]?.key || 'gold' },
   };
 }
 
@@ -183,11 +190,14 @@ export default function AdminApp() {
 
   // Kelola Paket States
   const [selectedPkgTier, setSelectedPkgTier] = useState<PackageTier>('bronze');
+  const [creatingNewPkg, setCreatingNewPkg] = useState(false);
   const [pkgDraft, setPkgDraft] = useState<PackageConfig>(() => createEmptyPackageConfig('bronze'));
   const [pkgDirty, setPkgDirty] = useState(false);
   const [newFiturNama, setNewFiturNama] = useState('');
   const [newFiturTersedia, setNewFiturTersedia] = useState(true);
   const [savingPackage, setSavingPackage] = useState(false);
+  const [deletingPkg, setDeletingPkg] = useState(false);
+  const [confirmDeletePkgId, setConfirmDeletePkgId] = useState<string | null>(null);
   const [repairingPlatinum, setRepairingPlatinum] = useState(false);
   const [packageFeedback, setPackageFeedback] = useState<{
     type: 'success' | 'error';
@@ -372,9 +382,11 @@ export default function AdminApp() {
     }
   }, [packageConfigs, editingTemplateId, templateFormDirty]);
 
+  const orderedPackages = useMemo(() => getOrderedPackages(packageConfigs), [packageConfigs]);
+
   // Sync Kelola Paket draft when tier changes or when Firestore updates while untouched
   useEffect(() => {
-    if (pkgDirty) return;
+    if (pkgDirty || creatingNewPkg) return;
     const cfg = packageConfigs[selectedPkgTier];
     if (cfg) {
       setPkgDraft({
@@ -384,11 +396,13 @@ export default function AdminApp() {
     } else {
       setPkgDraft(createEmptyPackageConfig(selectedPkgTier));
     }
-  }, [selectedPkgTier, packageConfigs, pkgDirty]);
+  }, [selectedPkgTier, packageConfigs, pkgDirty, creatingNewPkg]);
 
   const handleSelectPkgTier = (tier: PackageTier) => {
+    setCreatingNewPkg(false);
     setSelectedPkgTier(tier);
     setPkgDirty(false);
+    setConfirmDeletePkgId(null);
     setPackageFeedback(null);
     const cfg = packageConfigs[tier];
     if (cfg) {
@@ -399,6 +413,23 @@ export default function AdminApp() {
     } else {
       setPkgDraft(createEmptyPackageConfig(tier));
     }
+  };
+
+  const handleStartCreateNewPackage = () => {
+    setCreatingNewPkg(true);
+    setPkgDirty(false);
+    setConfirmDeletePkgId(null);
+    setPackageFeedback(null);
+    setPkgDraft({
+      id: '',
+      namaPaket: '',
+      harga: 0,
+      hargaCoret: 0,
+      promoAktif: false,
+      labelPromo: 'Promo',
+      order: getNextPackageOrder(packageConfigs),
+      fitur: [],
+    });
   };
 
   const templateMap = useMemo(() => {
@@ -546,12 +577,12 @@ export default function AdminApp() {
       return;
     }
 
-    for (const tier of PACKAGE_TIERS) {
-      const tierUrl = formState.linkPaket[tier.key].trim();
+    for (const tier of orderedPackages) {
+      const tierUrl = (formState.linkPaket[tier.key] || '').trim();
       if (tierUrl && !/^https?:\/\/.+/i.test(tierUrl)) {
         setTemplateFeedback({
           type: 'error',
-          message: `Link paket ${tier.label} harus diawali http:// atau https:// (atau kosongkan).`,
+          message: `Link paket ${tier.label} harus diawali http:// atau https:// (atau kosongkan jika tidak tersedia).`,
         });
         return;
       }
@@ -600,19 +631,26 @@ export default function AdminApp() {
     setTemplateFormDirty(true);
     setTemplateFeedback(null);
     setShowUrlThumbnailInput(Boolean(tpl.fotoThumbnail && !tpl.fotoThumbnail.startsWith('data:')));
+
+    const linkPaket: Record<string, string> = { ...(tpl.linkPaket || {}) };
+    const hargaPaket: Record<string, number> = { ...(tpl.hargaPaket || {}) };
+    orderedPackages.forEach((slot) => {
+      if (typeof linkPaket[slot.key] !== 'string') {
+        linkPaket[slot.key] = '';
+      }
+      if (typeof hargaPaket[slot.key] !== 'number') {
+        hargaPaket[slot.key] = packageConfigs?.[slot.key]?.harga ?? 0;
+      }
+    });
+
     setFormState({
       namaTemplate: tpl.namaTemplate,
       kategori: tpl.kategori || 'Pernikahan',
       fotoThumbnail: tpl.fotoThumbnail,
       linkWebsite: tpl.linkWebsite,
-      linkPaket: {
-        bronze: tpl.linkPaket?.bronze || '',
-        silver: tpl.linkPaket?.silver || '',
-        gold: tpl.linkPaket?.gold || '',
-        platinum: tpl.linkPaket?.platinum || '',
-      },
+      linkPaket,
       deskripsi: tpl.deskripsi,
-      hargaPaket: { ...tpl.hargaPaket },
+      hargaPaket,
       hargaPromo: { ...tpl.hargaPromo },
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -703,12 +741,33 @@ export default function AdminApp() {
 
     setSavingPackage(true);
     try {
-      await savePackageConfig(pkgDraft);
-      setPkgDirty(false);
-      setPackageFeedback({
-        type: 'success',
-        message: `Paket ${pkgDraft.namaPaket} dan daftar fiturnya berhasil disimpan ke Firestore.`,
-      });
+      if (creatingNewPkg) {
+        const newId = generatePackageId(pkgDraft.namaPaket, packageConfigs);
+        const newOrder =
+          typeof pkgDraft.order === 'number' && pkgDraft.order >= 1
+            ? Math.min(100, Math.round(pkgDraft.order))
+            : getNextPackageOrder(packageConfigs);
+        const newPkg: PackageConfig = {
+          ...pkgDraft,
+          id: newId,
+          order: newOrder,
+        };
+        await savePackageConfig(newPkg);
+        setCreatingNewPkg(false);
+        setSelectedPkgTier(newId);
+        setPkgDirty(false);
+        setPackageFeedback({
+          type: 'success',
+          message: `Paket baru "${newPkg.namaPaket}" berhasil dibuat dan disimpan ke Firestore.`,
+        });
+      } else {
+        await savePackageConfig(pkgDraft);
+        setPkgDirty(false);
+        setPackageFeedback({
+          type: 'success',
+          message: `Paket ${pkgDraft.namaPaket} dan daftar fiturnya berhasil disimpan ke Firestore.`,
+        });
+      }
     } catch (err) {
       console.error('Save package error:', err);
       setPackageFeedback({
@@ -720,6 +779,31 @@ export default function AdminApp() {
     }
   };
 
+  const handleDeleteCustomPackage = async (packageId: string) => {
+    if (isCorePackageId(packageId)) return;
+    setDeletingPkg(true);
+    setPackageFeedback(null);
+    try {
+      const deletedName = packageConfigs[packageId]?.namaPaket || packageId;
+      await deletePackageConfig(packageId);
+      setConfirmDeletePkgId(null);
+      setPkgDirty(false);
+      setSelectedPkgTier('bronze');
+      setPackageFeedback({
+        type: 'success',
+        message: `Paket "${deletedName}" berhasil dihapus dari Firestore.`,
+      });
+    } catch (err) {
+      console.error('Delete custom package error:', err);
+      setPackageFeedback({
+        type: 'error',
+        message: 'Gagal menghapus paket dari Firestore.',
+      });
+    } finally {
+      setDeletingPkg(false);
+    }
+  };
+
   const handleRepairPlatinum = async () => {
     setPackageFeedback(null);
     setRepairingPlatinum(true);
@@ -728,6 +812,7 @@ export default function AdminApp() {
         packageConfigs.platinum?.fitur ||
         (selectedPkgTier === 'platinum' ? pkgDraft.fitur : []);
       const repaired = await repairPlatinumPackage(currentPlatinumFitur);
+      setCreatingNewPkg(false);
       setSelectedPkgTier('platinum');
       setPkgDirty(false);
       setPkgDraft({
@@ -1450,41 +1535,52 @@ export default function AdminApp() {
                 <div className="p-3.5 bg-[#0B0B0D] border border-white/10 space-y-2.5">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-[#D4AF37]">
-                      Link Template per Paket (Opsional)
+                      Link Template per Paket
                     </p>
-                    <p className="text-[11px] text-[#FAF8F4]/55 mt-0.5">
-                      Sesuaikan link demo khusus tiap paket harga. Kosongkan jika memakai Link Utama.
+                    <p className="text-[11px] text-[#FAF8F4]/60 mt-0.5 leading-relaxed">
+                      Tempelkan link demo khusus tiap paket harga. Jika link dikosongkan, pilihan paket tersebut otomatis berstatus <strong className="text-amber-300">&ldquo;Template tidak tersedia&rdquo;</strong> dan dinonaktifkan (tidak bisa dipesan).
                     </p>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {PACKAGE_TIERS.map((tier) => (
-                      <div key={tier.key}>
-                        <label
-                          htmlFor={`link-paket-${tier.key}`}
-                          className="block text-[11px] text-[#FAF8F4]/75 mb-1"
-                        >
-                          Link {getTierLabel(tier.key, packageConfigs)}
-                        </label>
-                        <input
-                          id={`link-paket-${tier.key}`}
-                          type="url"
-                          maxLength={1000}
-                          value={formState.linkPaket[tier.key]}
-                          onChange={(e) => {
-                            setTemplateFormDirty(true);
-                            setFormState((prev) => ({
-                              ...prev,
-                              linkPaket: {
-                                ...prev.linkPaket,
-                                [tier.key]: e.target.value,
-                              },
-                            }));
-                          }}
-                          placeholder="https://... (opsional)"
-                          className="w-full px-2.5 py-2 min-h-[38px] bg-[#131317] border border-white/15 text-xs font-mono text-[#FAF8F4] focus:outline-none focus:border-[#D4AF37]"
-                        />
-                      </div>
-                    ))}
+                    {orderedPackages.map((tier) => {
+                      const currentLink = (formState.linkPaket[tier.key] || '').trim();
+                      const hasValidUrl = /^https?:\/\/.+/i.test(currentLink);
+                      return (
+                        <div key={tier.key}>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <label
+                              htmlFor={`link-paket-${tier.key}`}
+                              className="block text-[11px] text-[#FAF8F4]/80 font-medium"
+                            >
+                              Link {tier.label}
+                            </label>
+                            {!hasValidUrl && (
+                              <span className="text-[10px] text-amber-300/90">
+                                Kosong · Tidak tersedia
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            id={`link-paket-${tier.key}`}
+                            type="url"
+                            maxLength={1000}
+                            value={formState.linkPaket[tier.key] || ''}
+                            onChange={(e) => {
+                              setTemplateFormDirty(true);
+                              setFormState((prev) => ({
+                                ...prev,
+                                linkPaket: {
+                                  ...prev.linkPaket,
+                                  [tier.key]: e.target.value,
+                                },
+                              }));
+                            }}
+                            placeholder="https://... (kosongkan jika tidak tersedia)"
+                            className="w-full px-2.5 py-2 min-h-[38px] bg-[#131317] border border-white/15 text-xs font-mono text-[#FAF8F4] focus:outline-none focus:border-[#D4AF37]"
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -1507,19 +1603,19 @@ export default function AdminApp() {
                   />
                 </div>
 
-                {/* 4 Input Harga Paket */}
+                {/* Input Harga Paket */}
                 <div className="pt-2 border-t border-white/10">
                   <p className="text-xs font-semibold uppercase tracking-wider text-[#D4AF37] mb-3">
                     Harga Paket Template (Rp)
                   </p>
                   <div className="grid grid-cols-2 gap-3">
-                    {PACKAGE_TIERS.map((tier) => (
+                    {orderedPackages.map((tier) => (
                       <div key={tier.key}>
                         <label
                           htmlFor={`harga-${tier.key}`}
                           className="block text-xs text-[#FAF8F4]/80 mb-1"
                         >
-                          {getTierLabel(tier.key, packageConfigs)}
+                          {tier.label}
                         </label>
                         <input
                           id={`harga-${tier.key}`}
@@ -1527,7 +1623,7 @@ export default function AdminApp() {
                           min={0}
                           max={100000000}
                           required
-                          value={formState.hargaPaket[tier.key]}
+                          value={formState.hargaPaket[tier.key] ?? 0}
                           onChange={(e) => {
                             const val = Number(e.target.value) || 0;
                             setTemplateFormDirty(true);
@@ -1586,9 +1682,9 @@ export default function AdminApp() {
                         }}
                         className="w-full px-3 py-2 min-h-[40px] bg-[#131317] border border-white/15 text-sm text-[#FAF8F4] focus:outline-none focus:border-[#D4AF37]"
                       >
-                        {PACKAGE_TIERS.map((t) => (
+                        {orderedPackages.map((t) => (
                           <option key={t.key} value={t.key}>
-                            {getTierLabel(t.key, packageConfigs)}
+                            {t.label}
                           </option>
                         ))}
                       </select>
@@ -1745,8 +1841,8 @@ export default function AdminApp() {
                 <div className="space-y-4">
                   {templates.map((tpl) => {
                     const promoOn = isPromoActive(tpl.hargaPromo);
-                    const customLinkCount = PACKAGE_TIERS.filter(
-                      (t) => tpl.linkPaket?.[t.key]?.trim()
+                    const availableLinkCount = orderedPackages.filter((t) =>
+                      isPackageAvailableForTemplate(tpl, t.key)
                     ).length;
                     return (
                       <article
@@ -1792,22 +1888,34 @@ export default function AdminApp() {
                                 <span className="truncate">{tpl.linkWebsite}</span>
                                 <ExternalLink className="w-3 h-3 shrink-0" />
                               </a>
-                              {customLinkCount > 0 && (
-                                <span className="text-[11px] text-emerald-300">
-                                  +{customLinkCount} link paket khusus
-                                </span>
-                              )}
+                              <span
+                                className={`text-[11px] font-medium ${
+                                  availableLinkCount === orderedPackages.length
+                                    ? 'text-emerald-300'
+                                    : availableLinkCount > 0
+                                    ? 'text-amber-300'
+                                    : 'text-red-300'
+                                }`}
+                              >
+                                {availableLinkCount}/{orderedPackages.length} paket punya link
+                              </span>
                             </div>
                           </div>
 
                           <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-white/10">
                             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#FAF8F4]/75 tabular-nums">
-                              {PACKAGE_TIERS.map((t) => (
-                                <span key={t.key}>
-                                  {getTierLabel(t.key, packageConfigs)}:{' '}
-                                  {formatRupiah(tpl.hargaPaket[t.key])}
-                                </span>
-                              ))}
+                              {orderedPackages.map((t) => {
+                                const hasLink = isPackageAvailableForTemplate(tpl, t.key);
+                                return (
+                                  <span
+                                    key={t.key}
+                                    className={hasLink ? '' : 'text-[#FAF8F4]/40 line-through'}
+                                    title={hasLink ? 'Tersedia' : 'Link belum ditempel (Tidak tersedia)'}
+                                  >
+                                    {t.label}: {formatRupiah(tpl.hargaPaket?.[t.key] ?? 0)}
+                                  </span>
+                                );
+                              })}
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0">
@@ -1863,69 +1971,85 @@ export default function AdminApp() {
         {/* TAB 2: KELOLA PAKET */}
         {activeTab === 'packages' && (
           <section className="space-y-6">
-            <div className="border-b border-white/10 pb-4 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.16em] text-[#D4AF37] font-semibold">
-                  100% Tersimpan &amp; Dibaca dari Firestore
-                </p>
-                <h2 className="font-display text-3xl font-semibold text-[#FAF8F4]">
-                  Kelola Paket
-                </h2>
-                <p className="mt-1 text-xs text-[#FAF8F4]/65">
-                  Atur nama paket, harga, harga coret/promo, dan daftar fitur (centang ✓ atau silang ✕). Perubahan langsung disimpan permanen di Firestore.
-                </p>
+            <div className="border-b border-white/10 pb-4 flex flex-col gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#D4AF37] font-semibold">
+                    100% Tersimpan &amp; Dibaca dari Firestore
+                  </p>
+                  <h2 className="font-display text-3xl font-semibold text-[#FAF8F4]">
+                    Kelola Paket
+                  </h2>
+                  <p className="mt-1 text-xs text-[#FAF8F4]/65">
+                    Atur paket yang tersedia, buat paket baru, ubah harga/promo, serta daftar fitur (centang ✓ atau silang ✕). Perubahan langsung disimpan permanen di Firestore.
+                  </p>
+                </div>
+
+                {/* Action buttons: Buat Paket Baru + Perbaiki Data Platinum */}
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleStartCreateNewPackage}
+                    className={`inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[40px] text-xs font-semibold transition-colors whitespace-nowrap ${
+                      creatingNewPkg
+                        ? 'bg-[#D4AF37] text-[#0B0B0D] ring-2 ring-[#D4AF37]/40'
+                        : 'bg-[#C8A24D] hover:bg-[#D4AF37] text-[#0B0B0D]'
+                    }`}
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Buat Paket Baru</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={repairingPlatinum}
+                    onClick={() => void handleRepairPlatinum()}
+                    className="inline-flex items-center justify-center gap-2 px-3.5 py-2.5 min-h-[40px] bg-amber-500/15 border border-[#D4AF37] text-xs font-semibold text-[#D4AF37] hover:bg-[#C8A24D] hover:text-[#0B0B0D] disabled:opacity-60 transition-colors whitespace-nowrap"
+                  >
+                    {repairingPlatinum ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Memperbaiki Platinum...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Wrench className="w-3.5 h-3.5" />
+                        <span>Perbaiki Data Platinum</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
-              {/* Tier Selector Tabs + Perbaiki Data Platinum */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                <button
-                  type="button"
-                  disabled={repairingPlatinum}
-                  onClick={() => void handleRepairPlatinum()}
-                  className="inline-flex items-center justify-center gap-2 px-3.5 py-2.5 min-h-[40px] bg-amber-500/15 border border-[#D4AF37] text-xs font-semibold text-[#D4AF37] hover:bg-[#C8A24D] hover:text-[#0B0B0D] disabled:opacity-60 transition-colors whitespace-nowrap"
-                >
-                  {repairingPlatinum ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Memperbaiki Platinum...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Wrench className="w-3.5 h-3.5" />
-                      <span>Perbaiki Data Platinum</span>
-                    </>
-                  )}
-                </button>
-
-                <div className="grid grid-cols-4 gap-1 p-1 bg-[#131317] border border-white/15">
-                  {PACKAGE_TIERS.map((tier) => {
-                    const cfg = packageConfigs[tier.key];
-                    const active = selectedPkgTier === tier.key;
-                    const saved = Boolean(cfg);
-                    return (
-                      <button
-                        key={tier.key}
-                        type="button"
-                        onClick={() => handleSelectPkgTier(tier.key)}
-                        className={`px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap flex items-center justify-center gap-1.5 ${
-                          active
-                            ? 'bg-[#C8A24D] text-[#0B0B0D]'
-                            : 'text-[#FAF8F4]/75 hover:text-[#FAF8F4]'
-                        }`}
-                      >
-                        <span>{cfg?.namaPaket || tier.label}</span>
-                        {saved && (
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              active ? 'bg-[#0B0B0D]' : 'bg-emerald-400'
-                            }`}
-                            title="Sudah tersimpan di Firestore"
-                          />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
+              {/* Dynamic Package Tabs */}
+              <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-[#131317] border border-white/15">
+                {orderedPackages.map((tier) => {
+                  const cfg = packageConfigs[tier.key];
+                  const active = !creatingNewPkg && selectedPkgTier === tier.key;
+                  const saved = Boolean(cfg);
+                  return (
+                    <button
+                      key={tier.key}
+                      type="button"
+                      onClick={() => handleSelectPkgTier(tier.key)}
+                      className={`px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap flex items-center justify-center gap-1.5 ${
+                        active
+                          ? 'bg-[#C8A24D] text-[#0B0B0D]'
+                          : 'text-[#FAF8F4]/75 hover:text-[#FAF8F4] hover:bg-white/5'
+                      }`}
+                    >
+                      <span>{cfg?.namaPaket || tier.label}</span>
+                      {saved && (
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            active ? 'bg-[#0B0B0D]' : 'bg-emerald-400'
+                          }`}
+                          title="Sudah tersimpan di Firestore"
+                        />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -1935,18 +2059,73 @@ export default function AdminApp() {
                 onSubmit={handleSavePackage}
                 className="lg:col-span-7 bg-[#131317] border border-[#C8A24D]/30 p-5 sm:p-6 space-y-5"
               >
-                <div className="flex items-center justify-between gap-2 pb-3 border-b border-white/10 text-xs">
-                  <span className="text-[#FAF8F4]/75">
-                    Status di Firestore:{' '}
-                    {isSelectedTierSavedInFirestore ? (
-                      <strong className="text-emerald-300">Tersimpan di Firestore</strong>
-                    ) : (
-                      <strong className="text-amber-300">Belum ada dokumen di Firestore</strong>
-                    )}
-                  </span>
-                  {pkgDirty && (
-                    <span className="text-[#D4AF37] font-medium">Ada perubahan belum disimpan</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-white/10 text-xs">
+                  {creatingNewPkg ? (
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 bg-[#C8A24D]/20 border border-[#D4AF37]/50 text-[#D4AF37] font-semibold uppercase tracking-wider text-[10px]">
+                        Buat Paket Baru
+                      </span>
+                      <span className="text-[#FAF8F4]/75">
+                        Akan disimpan sebagai dokumen baru di Firestore
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-[#FAF8F4]/75">
+                      Status di Firestore:{' '}
+                      {isSelectedTierSavedInFirestore ? (
+                        <strong className="text-emerald-300">Tersimpan di Firestore</strong>
+                      ) : (
+                        <strong className="text-amber-300">Belum ada dokumen di Firestore</strong>
+                      )}
+                    </span>
                   )}
+
+                  <div className="flex items-center gap-3">
+                    {pkgDirty && (
+                      <span className="text-[#D4AF37] font-medium">Ada perubahan belum disimpan</span>
+                    )}
+
+                    {creatingNewPkg && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPkgTier(orderedPackages[0]?.key || 'bronze')}
+                        className="px-2.5 py-1 border border-white/20 text-[#FAF8F4]/80 hover:text-white text-xs"
+                      >
+                        Batal
+                      </button>
+                    )}
+
+                    {!creatingNewPkg && !isCorePackageId(selectedPkgTier) && isSelectedTierSavedInFirestore && (
+                      confirmDeletePkgId === selectedPkgTier ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={deletingPkg}
+                            onClick={() => void handleDeleteCustomPackage(selectedPkgTier)}
+                            className="px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold"
+                          >
+                            {deletingPkg ? 'Menghapus...' : 'Konfirmasi Hapus'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeletePkgId(null)}
+                            className="px-2 py-1 border border-white/20 text-xs"
+                          >
+                            Batal
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeletePkgId(selectedPkgTier)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 border border-red-500/40 text-red-300 hover:bg-red-950/50 text-xs"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Hapus Paket</span>
+                        </button>
+                      )
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1959,6 +2138,7 @@ export default function AdminApp() {
                       type="text"
                       required
                       maxLength={60}
+                      placeholder={creatingNewPkg ? 'Contoh: Diamond / VIP / Ekonomis' : ''}
                       value={pkgDraft.namaPaket}
                       onChange={(e) => {
                         setPkgDirty(true);
@@ -2180,6 +2360,11 @@ export default function AdminApp() {
                       <Loader2 className="w-4 h-4 animate-spin" />
                       <span>Menyimpan ke Firestore...</span>
                     </>
+                  ) : creatingNewPkg ? (
+                    <>
+                      <Plus className="w-4 h-4" />
+                      <span>Simpan Paket Baru ke Firestore</span>
+                    </>
                   ) : (
                     <span>Simpan Perubahan Paket {pkgDraft.namaPaket}</span>
                   )}
@@ -2194,7 +2379,7 @@ export default function AdminApp() {
                 <div className="mt-2 pb-4 border-b border-[#E4E0D8] flex items-baseline justify-between gap-2">
                   <div>
                     <h3 className="font-display text-2xl font-semibold text-[#111113]">
-                      Paket {pkgDraft.namaPaket || selectedPkgTier}
+                      Paket {pkgDraft.namaPaket || (creatingNewPkg ? 'Baru' : selectedPkgTier)}
                     </h3>
                     {pkgDraft.promoAktif && pkgDraft.hargaCoret > pkgDraft.harga && (
                       <span className="inline-block mt-0.5 text-[11px] font-semibold uppercase tracking-wider text-[#9E7B2F]">
@@ -2733,7 +2918,8 @@ export default function AdminApp() {
                   const linkedTemplate = templateMap.get(order.templateId);
                   const tierLabel = getTierLabel(order.paketDipilih, packageConfigs);
                   const sourceUrl = linkedTemplate
-                    ? getTemplatePreviewLink(linkedTemplate, order.paketDipilih)
+                    ? getTemplatePreviewLink(linkedTemplate, order.paketDipilih) ||
+                      linkedTemplate.linkWebsite
                     : '';
                   const waMessage = `Halo Kak ${order.namaPemesan}, terima kasih telah memesan undangan "${order.templateName}" paket ${tierLabel} untuk acara ${order.namaPria} & ${order.namaWanita} (${order.tanggalAcara}) di Sekar Kencana Invitation.`;
                   const waBuyerHref = buildWhatsAppUrl(order.noWA, waMessage);

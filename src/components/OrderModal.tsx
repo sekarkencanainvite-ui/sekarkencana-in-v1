@@ -1,13 +1,14 @@
-import { FormEvent, useEffect, useState } from 'react';
-import { Check, CheckCircle2, Loader2, MessageCircle, X } from 'lucide-react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Check, CheckCircle2, Loader2, MessageCircle, X } from 'lucide-react';
 import { PackageConfig, PackageTier, TemplateItem } from '../types';
 import { createOrder } from '../lib/firebase';
 import {
   buildOrderWhatsAppMessage,
   buildWhatsAppUrl,
   formatRupiah,
+  getOrderedPackages,
   getPackagePrice,
-  PACKAGE_TIERS,
+  isPackageAvailableForTemplate,
 } from '../lib/pricing';
 
 interface OrderModalProps {
@@ -36,11 +37,20 @@ export default function OrderModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
 
+  const orderedPackages = useMemo(() => getOrderedPackages(packageConfigs), [packageConfigs]);
+
   useEffect(() => {
-    setSelectedTier(initialTier);
+    if (!template) {
+      setSelectedTier(initialTier);
+    } else if (isPackageAvailableForTemplate(template, initialTier)) {
+      setSelectedTier(initialTier);
+    } else {
+      const firstValid = orderedPackages.find((t) => isPackageAvailableForTemplate(template, t.key));
+      setSelectedTier(firstValid?.key || initialTier);
+    }
     setErrorMsg(null);
     setCreatedOrderId(null);
-  }, [template, initialTier]);
+  }, [template, initialTier, orderedPackages]);
 
   useEffect(() => {
     if (!template) return;
@@ -57,6 +67,7 @@ export default function OrderModal({
 
   if (!template) return null;
 
+  const selectedIsAvailable = isPackageAvailableForTemplate(template, selectedTier);
   const activePrice = getPackagePrice(template, selectedTier, packageConfigs);
   const activeFeatures = packageConfigs?.[selectedTier]?.fitur || [];
 
@@ -75,6 +86,11 @@ export default function OrderModal({
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+
+    if (!isPackageAvailableForTemplate(template, selectedTier)) {
+      setErrorMsg('Template tidak tersedia untuk paket ini sehingga tidak dapat dipesan.');
+      return;
+    }
 
     if (!namaPria.trim() || !namaWanita.trim() || !tanggalAcara.trim() || !namaPemesan.trim() || !noWA.trim()) {
       setErrorMsg('Mohon lengkapi seluruh data acara dan kontak pemesan.');
@@ -214,54 +230,79 @@ export default function OrderModal({
                 1. Pilih Paket Layanan
               </label>
               <div className="grid grid-cols-2 gap-2.5">
-                {PACKAGE_TIERS.map((tierMeta) => {
+                {orderedPackages.map((tierMeta) => {
+                  const isAvailable = isPackageAvailableForTemplate(template, tierMeta.key);
                   const pInfo = getPackagePrice(template, tierMeta.key, packageConfigs);
-                  const isSelected = selectedTier === tierMeta.key;
+                  const isSelected = selectedTier === tierMeta.key && isAvailable;
                   return (
                     <button
                       key={tierMeta.key}
                       type="button"
-                      onClick={() => setSelectedTier(tierMeta.key)}
+                      disabled={!isAvailable}
+                      onClick={() => {
+                        if (isAvailable) {
+                          setSelectedTier(tierMeta.key);
+                        }
+                      }}
                       className={`text-left p-3 border transition-colors ${
-                        isSelected
+                        !isAvailable
+                          ? 'bg-[#F3F1EC] border-[#E4E0D8] text-[#71717A] cursor-not-allowed opacity-75'
+                          : isSelected
                           ? 'bg-[#0B0B0D] border-[#C8A24D] text-[#FAF8F4]'
                           : 'bg-white border-[#E4E0D8] text-[#111113] hover:border-[#C8A24D]/60'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1">
-                        <span className="text-xs font-semibold uppercase">{pInfo.tierLabel}</span>
-                        {pInfo.isPromo && (
-                          <span className="text-[10px] font-semibold uppercase text-[#D4AF37]">
+                        <span className="text-xs font-semibold uppercase truncate">
+                          {pInfo.tierLabel}
+                        </span>
+                        {isAvailable && pInfo.isPromo && (
+                          <span className="text-[10px] font-semibold uppercase text-[#D4AF37] shrink-0">
                             {pInfo.labelPromo}
                           </span>
                         )}
                       </div>
-                      <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
-                        {pInfo.isPromo && (
+                      {!isAvailable ? (
+                        <p className="mt-1 text-[11px] font-medium text-red-700 leading-tight">
+                          Template tidak tersedia
+                        </p>
+                      ) : (
+                        <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
+                          {pInfo.isPromo && (
+                            <span
+                              className={`text-[11px] line-through tabular-nums ${
+                                isSelected ? 'text-[#FAF8F4]/50' : 'text-[#71717A]'
+                              }`}
+                            >
+                              {formatRupiah(pInfo.normalPrice)}
+                            </span>
+                          )}
                           <span
-                            className={`text-[11px] line-through tabular-nums ${
-                              isSelected ? 'text-[#FAF8F4]/50' : 'text-[#71717A]'
+                            className={`text-sm font-semibold tabular-nums ${
+                              pInfo.isPromo
+                                ? isSelected
+                                  ? 'text-[#D4AF37]'
+                                  : 'text-[#9E7B2F]'
+                                : ''
                             }`}
                           >
-                            {formatRupiah(pInfo.normalPrice)}
+                            {formatRupiah(pInfo.finalPrice)}
                           </span>
-                        )}
-                        <span
-                          className={`text-sm font-semibold tabular-nums ${
-                            pInfo.isPromo
-                              ? isSelected
-                                ? 'text-[#D4AF37]'
-                                : 'text-[#9E7B2F]'
-                              : ''
-                          }`}
-                        >
-                          {formatRupiah(pInfo.finalPrice)}
-                        </span>
-                      </div>
+                        </div>
+                      )}
                     </button>
                   );
                 })}
               </div>
+
+              {!selectedIsAvailable && (
+                <div className="mt-3 p-3 bg-red-50 border border-red-200 flex items-start gap-2 text-xs text-red-800">
+                  <AlertCircle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Template tidak tersedia.</strong> Paket ini belum memiliki link template sehingga pemesanan dinonaktifkan.
+                  </span>
+                </div>
+              )}
 
               {/* Compact Feature Checklist Summary (100% from Firestore) */}
               <div className="mt-3 bg-white border border-[#E4E0D8] p-3">
@@ -408,20 +449,22 @@ export default function OrderModal({
             <div className="space-y-2.5">
               <button
                 type="submit"
-                disabled={submitting}
-                className="w-full py-3.5 min-h-[48px] bg-[#C8A24D] hover:bg-[#D4AF37] disabled:opacity-60 text-[#0B0B0D] text-sm font-semibold transition-colors inline-flex items-center justify-center gap-2"
+                disabled={submitting || !selectedIsAvailable}
+                className="w-full py-3.5 min-h-[48px] bg-[#C8A24D] hover:bg-[#D4AF37] disabled:bg-[#D4CFC5] disabled:text-[#52525B] disabled:cursor-not-allowed text-[#0B0B0D] text-sm font-semibold transition-colors inline-flex items-center justify-center gap-2"
               >
                 {submitting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>Mengirim Pesanan...</span>
                   </>
+                ) : !selectedIsAvailable ? (
+                  <span>Template Tidak Tersedia</span>
                 ) : (
                   <span>Kirim Pesanan Paket {activePrice.tierLabel}</span>
                 )}
               </button>
 
-              {waOrderHref ? (
+              {selectedIsAvailable && waOrderHref ? (
                 <a
                   href={waOrderHref}
                   target="_blank"
@@ -431,7 +474,7 @@ export default function OrderModal({
                   <MessageCircle className="w-4 h-4 shrink-0" />
                   <span>Order Cepat via WhatsApp: &ldquo;Paket {activePrice.tierLabel} - {template.namaTemplate}&rdquo;</span>
                 </a>
-              ) : (
+              ) : !selectedIsAvailable ? null : (
                 <p className="text-[11px] text-center text-[#71717A] py-1">
                   Gunakan tombol Kirim Pesanan di atas untuk melanjutkan pemesanan Anda.
                 </p>

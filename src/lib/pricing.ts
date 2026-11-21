@@ -53,18 +53,76 @@ export const EMPTY_HARGA_PROMO: HargaPromo = {
   tanggalSelesai: '',
 };
 
-export function createEmptyPackageConfig(tier: PackageTier): PackageConfig {
-  const slot = PACKAGE_TIERS.find((p) => p.key === tier) || PACKAGE_TIERS[0];
+export function createEmptyPackageConfig(tier: PackageTier, order?: number): PackageConfig {
+  const slot = PACKAGE_TIERS.find((p) => p.key === tier);
   return {
     id: tier,
-    namaPaket: slot.label,
+    namaPaket: slot?.label || tier,
     harga: 0,
     hargaCoret: 0,
     promoAktif: false,
     labelPromo: 'Promo',
-    order: slot.order,
+    order: order ?? slot?.order ?? 1,
     fitur: [],
   };
+}
+
+export function getOrderedPackages(
+  packageConfigs?: Partial<Record<PackageTier, PackageConfig>>
+): PackageSlotMeta[] {
+  if (!packageConfigs) return PACKAGE_TIERS;
+  const entries = Object.values(packageConfigs).filter(
+    (cfg): cfg is PackageConfig => Boolean(cfg && cfg.id)
+  );
+  if (entries.length === 0) return PACKAGE_TIERS;
+
+  return entries
+    .slice()
+    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || a.namaPaket.localeCompare(b.namaPaket))
+    .map((cfg) => ({
+      key: cfg.id,
+      label: cfg.namaPaket?.trim() || cfg.id,
+      order: cfg.order ?? 99,
+    }));
+}
+
+export function getNextPackageOrder(
+  packageConfigs?: Partial<Record<PackageTier, PackageConfig>>
+): number {
+  const existing = packageConfigs
+    ? Object.values(packageConfigs)
+        .filter((cfg): cfg is PackageConfig => Boolean(cfg))
+        .map((cfg) => cfg.order || 0)
+    : [];
+  const baseMax = Math.max(PACKAGE_TIERS.length, ...existing, 0);
+  return baseMax + 1;
+}
+
+export function generatePackageId(
+  namaPaket: string,
+  existingConfigs?: Partial<Record<PackageTier, PackageConfig>>
+): string {
+  const base =
+    namaPaket
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'paket';
+
+  if (!existingConfigs || !existingConfigs[base]) {
+    return base;
+  }
+
+  let idx = 2;
+  while (existingConfigs[`${base}-${idx}`]) {
+    idx += 1;
+  }
+  return `${base}-${idx}`;
+}
+
+export function isCorePackageId(packageId: string): boolean {
+  return packageId === 'bronze' || packageId === 'silver' || packageId === 'gold' || packageId === 'platinum';
 }
 
 export function formatRupiah(amount: number): string {
@@ -124,9 +182,9 @@ export function getPackagePrice(
   tier: PackageTier,
   packageConfigs?: Partial<Record<PackageTier, PackageConfig>>
 ): ResolvedPackagePrice {
-  const meta = PACKAGE_TIERS.find((p) => p.key === tier) || PACKAGE_TIERS[0];
+  const meta = PACKAGE_TIERS.find((p) => p.key === tier);
   const pkgCfg = packageConfigs?.[tier];
-  const tierLabel = pkgCfg?.namaPaket?.trim() || meta.label;
+  const tierLabel = pkgCfg?.namaPaket?.trim() || meta?.label || tier;
 
   const templatePrice = template.hargaPaket?.[tier];
   const basePrice =
@@ -177,12 +235,17 @@ export function getPackagePrice(
   };
 }
 
+export function isPackageAvailableForTemplate(template: TemplateItem, tier: PackageTier): boolean {
+  const tierLink = template.linkPaket?.[tier]?.trim() || '';
+  return /^https?:\/\/.+/i.test(tierLink);
+}
+
 export function getTemplatePreviewLink(template: TemplateItem, tier: PackageTier): string {
-  const tierLink = template.linkPaket?.[tier]?.trim();
+  const tierLink = template.linkPaket?.[tier]?.trim() || '';
   if (tierLink && /^https?:\/\/.+/i.test(tierLink)) {
     return tierLink;
   }
-  return template.linkWebsite;
+  return '';
 }
 
 export function getTierLabel(

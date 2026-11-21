@@ -33,22 +33,20 @@ service cloud.firestore {
 
     function isValidHargaPaket(hp) {
       return hp is map
-        && hp.keys().hasAll(['bronze', 'silver', 'gold', 'platinum'])
-        && hp.keys().hasOnly(['bronze', 'silver', 'gold', 'platinum'])
-        && hp.bronze is number && hp.bronze >= 0 && hp.bronze <= 100000000
-        && hp.silver is number && hp.silver >= 0 && hp.silver <= 100000000
-        && hp.gold is number && hp.gold >= 0 && hp.gold <= 100000000
-        && hp.platinum is number && hp.platinum >= 0 && hp.platinum <= 100000000;
+        && hp.keys().size() <= 30
+        && (!('bronze' in hp) || (hp.bronze is number && hp.bronze >= 0 && hp.bronze <= 100000000))
+        && (!('silver' in hp) || (hp.silver is number && hp.silver >= 0 && hp.silver <= 100000000))
+        && (!('gold' in hp) || (hp.gold is number && hp.gold >= 0 && hp.gold <= 100000000))
+        && (!('platinum' in hp) || (hp.platinum is number && hp.platinum >= 0 && hp.platinum <= 100000000));
     }
 
     function isValidLinkPaket(lp) {
       return lp is map
-        && lp.keys().hasAll(['bronze', 'silver', 'gold', 'platinum'])
-        && lp.keys().hasOnly(['bronze', 'silver', 'gold', 'platinum'])
-        && lp.bronze is string && lp.bronze.size() <= 1000
-        && lp.silver is string && lp.silver.size() <= 1000
-        && lp.gold is string && lp.gold.size() <= 1000
-        && lp.platinum is string && lp.platinum.size() <= 1000;
+        && lp.keys().size() <= 30
+        && (!('bronze' in lp) || (lp.bronze is string && lp.bronze.size() <= 1000))
+        && (!('silver' in lp) || (lp.silver is string && lp.silver.size() <= 1000))
+        && (!('gold' in lp) || (lp.gold is string && lp.gold.size() <= 1000))
+        && (!('platinum' in lp) || (lp.platinum is string && lp.platinum.size() <= 1000));
     }
 
     function isValidHargaPromo(promo) {
@@ -56,7 +54,7 @@ service cloud.firestore {
         && promo.keys().hasAll(['aktif', 'paket', 'hargaPromo', 'labelPromo', 'tanggalMulai', 'tanggalSelesai'])
         && promo.keys().hasOnly(['aktif', 'paket', 'hargaPromo', 'labelPromo', 'tanggalMulai', 'tanggalSelesai'])
         && promo.aktif is bool
-        && promo.paket is string && promo.paket in ['bronze', 'silver', 'gold', 'platinum']
+        && isValidId(promo.paket) && promo.paket.size() <= 60
         && promo.hargaPromo is number && promo.hargaPromo >= 0 && promo.hargaPromo <= 100000000
         && promo.labelPromo is string && promo.labelPromo.size() <= 60
         && promo.tanggalMulai is string && promo.tanggalMulai.size() <= 40
@@ -98,7 +96,7 @@ service cloud.firestore {
         && data.hargaCoret is number && data.hargaCoret >= 0 && data.hargaCoret <= 100000000
         && data.promoAktif is bool
         && data.labelPromo is string && data.labelPromo.size() <= 60
-        && data.order is number && data.order >= 1 && data.order <= 10
+        && data.order is number && data.order >= 1 && data.order <= 100
         && data.fitur is list && data.fitur.size() <= 30
         && (data.fitur.size() == 0 || (
           data.fitur[0] is map
@@ -123,7 +121,7 @@ service cloud.firestore {
         ])
         && isValidId(data.templateId)
         && data.templateName is string && data.templateName.size() >= 1 && data.templateName.size() <= 120
-        && data.paketDipilih is string && data.paketDipilih in ['bronze', 'silver', 'gold', 'platinum']
+        && isValidId(data.paketDipilih) && data.paketDipilih.size() <= 60
         && data.hargaBayar is number && data.hargaBayar >= 0 && data.hargaBayar <= 100000000
         && data.namaPria is string && data.namaPria.size() >= 1 && data.namaPria.size() <= 120
         && data.namaWanita is string && data.namaWanita.size() >= 1 && data.namaWanita.size() <= 120
@@ -182,18 +180,18 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(templateId);
     }
 
-    // Packages (Bronze, Silver, Gold, Platinum): Public read, Admin-only write
+    // Packages (Bronze, Silver, Gold, Platinum, and custom packages): Public read, Admin-only write
     match /packages/{packageId} {
       allow list: if true;
-      allow get: if packageId in ['bronze', 'silver', 'gold', 'platinum'];
+      allow get: if isValidId(packageId);
 
       allow create: if isAdmin()
-        && packageId in ['bronze', 'silver', 'gold', 'platinum']
+        && isValidId(packageId) && packageId.size() <= 60
         && isValidPackage(incoming())
         && incoming().updatedAt == request.time;
 
       allow update: if isAdmin()
-        && packageId in ['bronze', 'silver', 'gold', 'platinum']
+        && isValidId(packageId) && packageId.size() <= 60
         && isValidPackage(incoming())
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -201,7 +199,9 @@ service cloud.firestore {
           'order', 'fitur', 'updatedAt'
         ]);
 
-      allow delete: if false;
+      allow delete: if isAdmin()
+        && isValidId(packageId)
+        && !(packageId in ['bronze', 'silver', 'gold', 'platinum']);
     }
 
     // Orders: Public create (with strict template existence & initial 'baru' status), Admin-only read/update/delete

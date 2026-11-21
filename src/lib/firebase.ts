@@ -25,6 +25,8 @@ import {
 import firebaseConfig from '../../firebase-applet-config.json';
 import {
   AdminProfile,
+  HargaPaket,
+  LinkPaket,
   OrderFormPayload,
   OrderItem,
   OrderStatus,
@@ -246,21 +248,19 @@ function mapPackagesSnapshot(
   const fromFirestore: Partial<Record<PackageTier, PackageConfig>> = {};
 
   snapshot.docs.forEach((d) => {
-    const tier = d.id as PackageTier;
-    if (tier === 'bronze' || tier === 'silver' || tier === 'gold' || tier === 'platinum') {
-      const data = d.data();
-      fromFirestore[tier] = {
-        id: tier,
-        namaPaket: String(data.namaPaket ?? tier),
-        harga: Number(data.harga ?? 0),
-        hargaCoret: Number(data.hargaCoret ?? 0),
-        promoAktif: Boolean(data.promoAktif),
-        labelPromo: String(data.labelPromo ?? 'Promo'),
-        order: Number(data.order ?? 1),
-        fitur: normalizeFiturList(data.fitur),
-        updatedAt: data.updatedAt,
-      };
-    }
+    const tier = d.id;
+    const data = d.data();
+    fromFirestore[tier] = {
+      id: tier,
+      namaPaket: String(data.namaPaket ?? tier),
+      harga: Number(data.harga ?? 0),
+      hargaCoret: Number(data.hargaCoret ?? 0),
+      promoAktif: Boolean(data.promoAktif),
+      labelPromo: String(data.labelPromo ?? 'Promo'),
+      order: Number(data.order ?? 99),
+      fitur: normalizeFiturList(data.fitur),
+      updatedAt: data.updatedAt,
+    };
   });
 
   return fromFirestore;
@@ -331,6 +331,15 @@ export async function savePackageConfig(pkg: PackageConfig): Promise<void> {
     await setDoc(doc(db, 'packages', pkg.id), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deletePackageConfig(packageId: string): Promise<void> {
+  const path = `packages/${packageId}`;
+  try {
+    await deleteDoc(doc(db, 'packages', packageId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
@@ -557,6 +566,30 @@ export async function updateTemplateThumbnail(
   }
 }
 
+function normalizeLinkPaketMap(raw: unknown): LinkPaket {
+  const result: LinkPaket = { bronze: '', silver: '', gold: '', platinum: '' };
+  if (raw && typeof raw === 'object') {
+    Object.entries(raw as Record<string, unknown>).forEach(([key, val]) => {
+      if (key && typeof val === 'string') {
+        result[key] = clampString(val, 1000);
+      }
+    });
+  }
+  return result;
+}
+
+function normalizeHargaPaketMap(raw: unknown): HargaPaket {
+  const result: HargaPaket = { bronze: 0, silver: 0, gold: 0, platinum: 0 };
+  if (raw && typeof raw === 'object') {
+    Object.entries(raw as Record<string, unknown>).forEach(([key, val]) => {
+      if (key) {
+        result[key] = clampPrice(Number(val ?? 0));
+      }
+    });
+  }
+  return result;
+}
+
 function mapTemplatesSnapshot(snapshot: QuerySnapshot<DocumentData>): TemplateItem[] {
   return snapshot.docs.map((d) => {
     const data = d.data();
@@ -567,19 +600,9 @@ function mapTemplatesSnapshot(snapshot: QuerySnapshot<DocumentData>): TemplateIt
       kategori: String(data.kategori ?? 'Pernikahan') || 'Pernikahan',
       fotoThumbnail: String(data.fotoThumbnail ?? ''),
       linkWebsite: primaryLink,
-      linkPaket: {
-        bronze: String(data.linkPaket?.bronze ?? ''),
-        silver: String(data.linkPaket?.silver ?? ''),
-        gold: String(data.linkPaket?.gold ?? ''),
-        platinum: String(data.linkPaket?.platinum ?? ''),
-      },
+      linkPaket: normalizeLinkPaketMap(data.linkPaket),
       deskripsi: String(data.deskripsi ?? ''),
-      hargaPaket: {
-        bronze: Number(data.hargaPaket?.bronze ?? 0),
-        silver: Number(data.hargaPaket?.silver ?? 0),
-        gold: Number(data.hargaPaket?.gold ?? 0),
-        platinum: Number(data.hargaPaket?.platinum ?? 0),
-      },
+      hargaPaket: normalizeHargaPaketMap(data.hargaPaket),
       hargaPromo: {
         aktif: Boolean(data.hargaPromo?.aktif),
         paket: data.hargaPromo?.paket || 'gold',
@@ -689,19 +712,9 @@ export async function createTemplate(payload: TemplateFormPayload): Promise<stri
     kategori: clampString(payload.kategori || 'Pernikahan', 60),
     fotoThumbnail: clampString(payload.fotoThumbnail, 500000),
     linkWebsite: clampString(payload.linkWebsite, 1000),
-    linkPaket: {
-      bronze: clampString(payload.linkPaket?.bronze || '', 1000),
-      silver: clampString(payload.linkPaket?.silver || '', 1000),
-      gold: clampString(payload.linkPaket?.gold || '', 1000),
-      platinum: clampString(payload.linkPaket?.platinum || '', 1000),
-    },
+    linkPaket: normalizeLinkPaketMap(payload.linkPaket),
     deskripsi: clampString(payload.deskripsi, 1500),
-    hargaPaket: {
-      bronze: clampPrice(payload.hargaPaket.bronze),
-      silver: clampPrice(payload.hargaPaket.silver),
-      gold: clampPrice(payload.hargaPaket.gold),
-      platinum: clampPrice(payload.hargaPaket.platinum),
-    },
+    hargaPaket: normalizeHargaPaketMap(payload.hargaPaket),
     hargaPromo: {
       aktif: Boolean(payload.hargaPromo.aktif),
       paket: payload.hargaPromo.paket,
@@ -729,19 +742,9 @@ export async function updateTemplate(templateId: string, payload: TemplateFormPa
     kategori: clampString(payload.kategori || 'Pernikahan', 60),
     fotoThumbnail: clampString(payload.fotoThumbnail, 500000),
     linkWebsite: clampString(payload.linkWebsite, 1000),
-    linkPaket: {
-      bronze: clampString(payload.linkPaket?.bronze || '', 1000),
-      silver: clampString(payload.linkPaket?.silver || '', 1000),
-      gold: clampString(payload.linkPaket?.gold || '', 1000),
-      platinum: clampString(payload.linkPaket?.platinum || '', 1000),
-    },
+    linkPaket: normalizeLinkPaketMap(payload.linkPaket),
     deskripsi: clampString(payload.deskripsi, 1500),
-    hargaPaket: {
-      bronze: clampPrice(payload.hargaPaket.bronze),
-      silver: clampPrice(payload.hargaPaket.silver),
-      gold: clampPrice(payload.hargaPaket.gold),
-      platinum: clampPrice(payload.hargaPaket.platinum),
-    },
+    hargaPaket: normalizeHargaPaketMap(payload.hargaPaket),
     hargaPromo: {
       aktif: Boolean(payload.hargaPromo.aktif),
       paket: payload.hargaPromo.paket,

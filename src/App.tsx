@@ -115,9 +115,9 @@ export default function App() {
     : '';
 
   const firestorePackagesList = useMemo(() => {
-    return PACKAGE_TIERS.map((slot) => packageConfigs[slot.key])
-      .filter((cfg): cfg is PackageConfig => Boolean(cfg))
-      .sort((a, b) => a.order - b.order);
+    return Object.values(packageConfigs)
+      .filter((cfg): cfg is PackageConfig => Boolean(cfg && cfg.id))
+      .sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || a.namaPaket.localeCompare(b.namaPaket));
   }, [packageConfigs]);
 
   const filteredTemplates = useMemo(() => {

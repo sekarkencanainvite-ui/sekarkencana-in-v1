@@ -1,4 +1,4 @@
-export type PackageTier = 'bronze' | 'silver' | 'gold' | 'platinum';
+export type PackageTier = string;
 
 export type OrderStatus = 'baru' | 'diproses' | 'selesai';
 
@@ -10,19 +10,9 @@ export type TemplateCategory =
   | 'Lamaran & Wisuda'
   | 'Acara Lainnya';
 
-export interface HargaPaket {
-  bronze: number;
-  silver: number;
-  gold: number;
-  platinum: number;
-}
+export type HargaPaket = Record<string, number>;
 
-export interface LinkPaket {
-  bronze: string;
-  silver: string;
-  gold: string;
-  platinum: string;
-}
+export type LinkPaket = Record<string, string>;
 
 export interface HargaPromo {
   aktif: boolean;
